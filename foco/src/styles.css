@@ -1,0 +1,74 @@
+@import "tailwindcss" source("../");
+
+@theme {
+  --font-display: "Fraunces", Georgia, serif;
+  --font-sans: "Manrope", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-paper: #f3eee4;
+  --color-card: #fbf8f2;
+  --color-ink: #1d1b18;
+  --color-muted: #6f685d;
+  --color-line: #e2dacb;
+  --color-tomato: #d9472b;
+  --color-tomato-soft: #f6d9cf;
+  --color-moss: #3f6b4f;
+  --color-moss-soft: #dbe7dc;
+}
+
+/* ---- tema: Noturno ---- */
+:root[data-theme="noturno"] {
+  --color-paper: #16130f;
+  --color-card: #1e1a15;
+  --color-ink: #f0e9dc;
+  --color-muted: #9a8f7d;
+  --color-line: #2e2822;
+  --color-tomato: #e85c3d;
+  --color-tomato-soft: #3a1a12;
+  --color-moss: #6ba882;
+  --color-moss-soft: #1a2a20;
+}
+
+/* ---- tema: Rosa ---- */
+:root[data-theme="rosa"] {
+  --color-paper: #fbeef2;
+  --color-card: #fff7fa;
+  --color-ink: #2b1420;
+  --color-muted: #8a6a75;
+  --color-line: #f0d4dd;
+  --color-tomato: #d6336c;
+  --color-tomato-soft: #fbd5e2;
+  --color-moss: #a24b8a;
+  --color-moss-soft: #f3d4ea;
+}
+
+/* ---- tema: Céu ---- */
+:root[data-theme="ceu"] {
+  --color-paper: #eef4fb;
+  --color-card: #f8fbff;
+  --color-ink: #0f1c2e;
+  --color-muted: #5c6f86;
+  --color-line: #d4e0ee;
+  --color-tomato: #2c7be5;
+  --color-tomato-soft: #d6e6fb;
+  --color-moss: #1f9a8a;
+  --color-moss-soft: #d1ece7;
+}
+
+body {
+  @apply m-0 bg-paper text-ink font-sans;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.grain {
+  background-image: radial-gradient(rgba(29, 27, 24, 0.045) 1px, transparent 1px);
+  background-size: 3px 3px;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.rise { animation: rise 0.5s ease-out both; }
