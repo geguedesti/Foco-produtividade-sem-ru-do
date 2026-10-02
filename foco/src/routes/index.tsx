@@ -1,15 +1,20 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, Clock, Flame, Target } from 'lucide-react'
+import { AccountDialog } from '@/components/AccountDialog'
 import { FocusTimer } from '@/components/FocusTimer'
 import { TaskList, type Task } from '@/components/TaskList'
 import { WeekChart } from '@/components/WeekChart'
 import {
   applyTheme,
   dayKey,
+  getLocalDashboard,
   getTheme,
   getWorkspaceId,
+  saveLocalDashboard,
   setTheme,
+  type LocalTask,
+  type LocalSession,
   type ThemeName,
 } from '@/lib/workspace'
 import {
@@ -18,8 +23,10 @@ import {
   getDashboard,
   logFocusSession,
   toggleTask,
+  importGuestData,
   type Priority,
 } from '@/server/productivity.functions'
+import { authClient } from '@/lib/auth-client'
 
 export const Route = createFileRoute('/')({
   component: Home,
@@ -42,6 +49,8 @@ const THEMES: { id: ThemeName; label: string; color: string }[] = [
 ]
 
 function Home() {
+  const { data: authSession, isPending: authPending } = authClient.useSession()
+  const accountUser = authSession?.user ?? null
   const [workspaceId, setWorkspaceId] = useState<string | null>(null)
   const [tasks, setTasks] = useState<FullTask[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
@@ -49,29 +58,72 @@ function Home() {
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState<Date | null>(null)
   const [theme, setThemeState] = useState<ThemeName>('padrao')
+  const [dataReady, setDataReady] = useState(false)
+  const [showAccount, setShowAccount] = useState(false)
 
   const refresh = useCallback(async (id: string) => {
+    if (!id.startsWith('account:')) {
+      const local = getLocalDashboard()
+      setTasks(local.tasks as FullTask[])
+      setSessions(local.sessions)
+      setError(null)
+      setLoading(false)
+      setDataReady(true)
+      return
+    }
     try {
       const data = await getDashboard({ data: { workspaceId: id } })
       setTasks(data.tasks)
       setSessions(data.sessions)
       setError(null)
     } catch {
-      setError('Não foi possível carregar seus dados. Tente recarregar a página.')
+      setError('Não foi possível carregar os dados da sua conta. Verifique a conexão com o banco e tente novamente.')
     } finally {
       setLoading(false)
+      setDataReady(true)
     }
   }, [])
 
   useEffect(() => {
-    const id = getWorkspaceId()
-    setWorkspaceId(id)
+    if (authPending) return
+    const guestId = getWorkspaceId()
     setNow(new Date())
     const t = getTheme()
     setThemeState(t)
     applyTheme(t)
-    refresh(id)
-  }, [refresh])
+    let active = true
+    async function initialize() {
+      if (accountUser) {
+        let importFailed = false
+        const importKey = `foco:imported:${accountUser.id}`
+        if (!localStorage.getItem(importKey)) {
+          const local = getLocalDashboard()
+          try {
+            await importGuestData({ data: { guestWorkspaceId: guestId, tasks: local.tasks, sessions: local.sessions } })
+            localStorage.setItem(importKey, '1')
+          } catch {
+            importFailed = true
+          }
+        }
+        if (!active) return
+        const id = `account:${accountUser.id}`
+        setWorkspaceId(id)
+        await refresh(id)
+        if (importFailed && active) setError('Sua conta entrou, mas não foi possível importar os dados deste navegador. Tente sair e entrar novamente para repetir.')
+      } else {
+        if (!active) return
+        setWorkspaceId(guestId)
+        await refresh(guestId)
+      }
+    }
+    void initialize()
+    return () => { active = false }
+  }, [accountUser, authPending, refresh])
+
+  useEffect(() => {
+    if (!dataReady || workspaceId?.startsWith('account:')) return
+    saveLocalDashboard({ tasks: tasks as LocalTask[], sessions: sessions as LocalSession[] })
+  }, [tasks, sessions, workspaceId, dataReady])
 
   function changeTheme(t: ThemeName) {
     setThemeState(t)
@@ -81,45 +133,61 @@ function Home() {
   async function handleCreate(title: string, priority: Priority, plannedMinutes: number) {
     if (!workspaceId) return
     const tempId = -Date.now()
+    const localId = Math.floor(Date.now() / 2)
+    const id = workspaceId.startsWith('account:') ? tempId : localId
+    const createdAt = new Date().toISOString()
     setTasks((ts) => [
       {
-        id: tempId,
+        id,
         title,
         priority,
         done: false,
         pomodoros: 0,
         plannedMinutes,
         doneMinutes: 0,
+        createdAt,
         completedAt: null,
       },
       ...ts,
     ])
+    if (!workspaceId.startsWith('account:')) return
     try {
       const row = await createTask({ data: { workspaceId, title, priority, plannedMinutes } })
-      setTasks((ts) => ts.map((t) => (t.id === tempId ? row : t)))
+      setTasks((ts) => ts.map((t) => (t.id === id ? row : t)))
     } catch {
-      setTasks((ts) => ts.filter((t) => t.id !== tempId))
+      setTasks((ts) => ts.filter((t) => t.id !== id))
       setError('Não foi possível salvar a tarefa.')
     }
   }
 
   async function handleToggle(task: Task) {
-    if (!workspaceId || task.id < 0) return
+    if (!workspaceId) return
     const done = !task.done
     setTasks((ts) =>
       ts.map((t) => (t.id === task.id ? { ...t, done, completedAt: done ? new Date().toISOString() : null } : t)),
     )
-    await toggleTask({ data: { workspaceId, id: task.id, done } }).catch(() => refresh(workspaceId))
+    if (workspaceId.startsWith('account:')) await toggleTask({ data: { workspaceId, id: task.id, done } }).catch(() => refresh(workspaceId))
   }
 
   async function handleDelete(task: Task) {
-    if (!workspaceId || task.id < 0) return
+    if (!workspaceId) return
     setTasks((ts) => ts.filter((t) => t.id !== task.id))
-    await deleteTask({ data: { workspaceId, id: task.id } }).catch(() => refresh(workspaceId))
+    if (workspaceId.startsWith('account:')) await deleteTask({ data: { workspaceId, id: task.id } }).catch(() => refresh(workspaceId))
   }
 
   async function handleFocusComplete(minutes: number, taskId: number | null) {
-    if (!workspaceId) return
+    if (!workspaceId || minutes < 1) return
+    if (!workspaceId.startsWith('account:')) {
+      const row: Session = { id: Date.now(), minutes, createdAt: new Date().toISOString(), taskId }
+      setSessions((s) => [row, ...s])
+      if (taskId != null) setTasks((ts) => ts.map((t) => {
+        if (t.id !== taskId) return t
+        const doneMinutes = t.doneMinutes + minutes
+        const reachedGoal = t.plannedMinutes > 0 && doneMinutes >= t.plannedMinutes
+        return { ...t, pomodoros: t.pomodoros + 1, doneMinutes, done: reachedGoal ? true : t.done, completedAt: reachedGoal && !t.done ? new Date().toISOString() : t.completedAt }
+      }))
+      return
+    }
     try {
       const row = await logFocusSession({ data: { workspaceId, minutes, taskId } })
       setSessions((s) => [row, ...s])
@@ -180,7 +248,7 @@ function Home() {
     }
   }, [sessions, tasks, now])
 
-  const openTasks = tasks.filter((t) => !t.done && t.id > 0)
+  const openTasks = tasks.filter((t) => !t.done)
   const dateLabel = now?.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }) ?? ''
 
   return (
@@ -210,6 +278,12 @@ function Home() {
               ))}
             </div>
             <span className="text-sm font-medium capitalize text-muted">{dateLabel}</span>
+            <a href="/faq" aria-label="Perguntas frequentes" title="Perguntas frequentes" className="grid h-8 w-8 place-items-center rounded-full border border-line text-sm font-bold text-muted transition hover:border-ink hover:text-ink">?</a>
+            {accountUser ? (
+              <button onClick={() => void authClient.signOut()} className="rounded-full border border-line px-3 py-1.5 text-xs font-semibold text-muted hover:border-ink hover:text-ink">Sair</button>
+            ) : (
+              <button onClick={() => setShowAccount(true)} className="rounded-full bg-ink px-3 py-1.5 text-xs font-semibold text-paper">Entrar / cadastro</button>
+            )}
           </div>
         </header>
 
@@ -271,9 +345,10 @@ function Home() {
         </section>
 
         <footer className="mt-10 text-center text-xs text-muted">
-          Sem cadastro: suas tarefas e sessões ficam salvas na nuvem e vinculadas a este navegador.
+          {accountUser ? `Conectada como ${accountUser.email}. Seus dados ficam salvos na sua conta.` : 'Sem login: suas tarefas e sessões ficam salvas somente neste navegador.'}
         </footer>
       </div>
+      {showAccount && <AccountDialog onClose={() => setShowAccount(false)} />}
     </div>
   )
 }

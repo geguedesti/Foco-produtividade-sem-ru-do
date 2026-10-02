@@ -57,7 +57,7 @@ export function CircularProgress({
       </svg>
 
       {done && (
-        <span className="relative z-10 grid place-items-center text-white">
+        <span className="relative z-10 grid place-items-center rounded-full bg-moss text-white" style={{ width: size - strokeWidth * 2, height: size - strokeWidth * 2 }}>
           <Check size={size * 0.55} strokeWidth={3} />
         </span>
       )}

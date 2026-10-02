@@ -16,7 +16,7 @@ export type Task = {
 
 const PRIORITY_STYLE: Record<string, string> = {
   alta: 'bg-tomato-soft text-tomato',
-  media: 'bg-[#efe3c4] text-[#8a6418]',
+  media: 'bg-[var(--color-priority-medium-soft)] text-[var(--color-priority-medium)]',
   baixa: 'bg-moss-soft text-moss',
 }
 const ORDER: Record<string, number> = { alta: 0, media: 1, baixa: 2 }
@@ -52,7 +52,7 @@ export function TaskList({
   function submit(e: React.FormEvent) {
     e.preventDefault()
     if (!title.trim()) return
-    const planned = (Number(hours) || 0) * 60 + (Number(minutes) || 0)
+    const planned = Math.min(24 * 60, (Number(hours) || 0) * 60 + (Number(minutes) || 0))
     onCreate(title.trim(), priority, planned)
     setTitle('')
     setHours('')
@@ -110,6 +110,7 @@ export function TaskList({
             <span className="text-xs uppercase tracking-wider text-muted">Tempo</span>
             <input
               value={hours}
+              maxLength={2}
               onChange={(e) => setHours(e.target.value.replace(/\D/g, '').slice(0, 2))}
               inputMode="numeric"
               placeholder="0"
@@ -119,6 +120,7 @@ export function TaskList({
             <span className="text-muted">h</span>
             <input
               value={minutes}
+              maxLength={2}
               onChange={(e) => setMinutes(e.target.value.replace(/\D/g, '').slice(0, 2))}
               inputMode="numeric"
               placeholder="00"

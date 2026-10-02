@@ -1,21 +1,32 @@
 import { createServerFn } from '@tanstack/react-start'
+import { getRequestHeaders } from '@tanstack/react-start/server'
 import { and, desc, eq, gte, sql } from 'drizzle-orm'
 import { db } from '../../db/index.js'
-import { focusSessions, tasks } from '../../db/schema.js'
+import { focusSessions, guestImport, tasks } from '../../db/schema.js'
+import { auth } from '@/lib/auth'
 
 export type Priority = 'alta' | 'media' | 'baixa'
 const PRIORITIES: Priority[] = ['alta', 'media', 'baixa']
 
 function workspace(id: unknown): string {
-  if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{8,64}$/.test(id)) {
+  if (typeof id !== 'string' || !/^(?:[a-zA-Z0-9-]{8,64}|account:[a-zA-Z0-9_-]{1,128})$/.test(id)) {
     throw new Error('Espaço de trabalho inválido')
   }
   return id
 }
 
+async function authorizeWorkspace(id: string) {
+  if (id.startsWith('account:')) {
+    if (!auth) throw new Error('Configure o banco e a chave de autenticação antes de usar sua conta.')
+    const session = await auth.api.getSession({ headers: getRequestHeaders() })
+    if (!session || id !== `account:${session.user.id}`) throw new Error('Entre na sua conta para acessar esses dados.')
+  }
+}
+
 export const getDashboard = createServerFn({ method: 'GET' })
   .inputValidator((data: { workspaceId: string }) => ({ workspaceId: workspace(data.workspaceId) }))
   .handler(async ({ data }) => {
+    await authorizeWorkspace(data.workspaceId)
     const since = new Date()
     since.setHours(0, 0, 0, 0)
     since.setDate(since.getDate() - 6)
@@ -67,6 +78,7 @@ export const createTask = createServerFn({ method: 'POST' })
     return { workspaceId: workspace(data.workspaceId), title, priority, plannedMinutes }
   })
   .handler(async ({ data }) => {
+    await authorizeWorkspace(data.workspaceId)
     const [row] = await db.insert(tasks).values(data).returning()
     return {
       ...row,
@@ -83,6 +95,7 @@ export const toggleTask = createServerFn({ method: 'POST' })
     done: Boolean(data.done),
   }))
   .handler(async ({ data }) => {
+    await authorizeWorkspace(data.workspaceId)
     await db
       .update(tasks)
       .set({ done: data.done, completedAt: data.done ? new Date() : null })
@@ -96,6 +109,7 @@ export const deleteTask = createServerFn({ method: 'POST' })
     id: Number(data.id),
   }))
   .handler(async ({ data }) => {
+    await authorizeWorkspace(data.workspaceId)
     await db.delete(tasks).where(and(eq(tasks.id, data.id), eq(tasks.workspaceId, data.workspaceId)))
     return { ok: true }
   })
@@ -107,6 +121,7 @@ export const logFocusSession = createServerFn({ method: 'POST' })
     taskId: data.taskId == null ? null : Number(data.taskId),
   }))
   .handler(async ({ data }) => {
+    await authorizeWorkspace(data.workspaceId)
     let taskId: number | null = null
     let autoCompleted = false
 
@@ -147,4 +162,81 @@ export const logFocusSession = createServerFn({ method: 'POST' })
       .returning()
 
     return { ...row, createdAt: row.createdAt.toISOString(), autoCompleted }
+  })
+
+export const importGuestData = createServerFn({ method: 'POST' })
+  .inputValidator((data: {
+    guestWorkspaceId: string
+    tasks: Array<{ id: number; title: string; priority: string; done: boolean; pomodoros: number; plannedMinutes: number; createdAt: string; completedAt: string | null }>
+    sessions: Array<{ id: number; minutes: number; createdAt: string; taskId: number | null }>
+  }) => {
+    const guestWorkspaceId = workspace(data.guestWorkspaceId)
+    if (guestWorkspaceId.startsWith('account:')) throw new Error('Espaço convidado inválido')
+    return {
+      guestWorkspaceId,
+      tasks: data.tasks.slice(0, 1000).map((t) => ({
+        id: Number(t.id), title: String(t.title).slice(0, 200),
+        priority: PRIORITIES.includes(t.priority as Priority) ? t.priority : 'media',
+        done: Boolean(t.done), pomodoros: Math.max(0, Math.round(Number(t.pomodoros) || 0)),
+        plannedMinutes: Math.max(0, Math.min(1440, Math.round(Number(t.plannedMinutes) || 0))),
+        createdAt: new Date(t.createdAt), completedAt: t.completedAt ? new Date(t.completedAt) : null,
+      })),
+      sessions: data.sessions.slice(0, 5000).map((s) => ({
+        id: Number(s.id), minutes: Math.max(1, Math.min(180, Math.round(Number(s.minutes) || 1))),
+        createdAt: new Date(s.createdAt), taskId: s.taskId == null ? null : Number(s.taskId),
+      })),
+    }
+  })
+  .handler(async ({ data }) => {
+    if (!auth) throw new Error('Configure o banco e a chave de autenticação para criar uma conta.')
+    const session = await auth.api.getSession({ headers: getRequestHeaders() })
+    if (!session) throw new Error('Entre na sua conta antes de importar os dados.')
+    const userId = session.user.id
+    await db.transaction(async (tx) => {
+      const [claimed] = await tx.insert(guestImport)
+        .values({ guestWorkspaceId: data.guestWorkspaceId, userId })
+        .onConflictDoNothing()
+        .returning({ id: guestImport.guestWorkspaceId })
+      if (!claimed) return
+
+      const legacyTasks = await tx.select().from(tasks).where(eq(tasks.workspaceId, data.guestWorkspaceId))
+      const legacySessions = await tx.select().from(focusSessions).where(eq(focusSessions.workspaceId, data.guestWorkspaceId))
+      const localTaskIds = new Map<number, number>()
+      const legacyTaskIds = new Map<number, number>()
+      async function copyTask(task: {
+        id: number; title: string; priority: string; done: boolean; pomodoros: number;
+        plannedMinutes: number; createdAt: Date; completedAt: Date | null
+      }, target: Map<number, number>) {
+        const [created] = await tx.insert(tasks).values({
+          workspaceId: `account:${userId}`,
+          title: task.title,
+          priority: task.priority,
+          done: task.done,
+          pomodoros: task.pomodoros,
+          plannedMinutes: task.plannedMinutes,
+          createdAt: task.createdAt,
+          completedAt: task.completedAt,
+        }).returning({ id: tasks.id })
+        target.set(task.id, created.id)
+      }
+      for (const task of data.tasks) await copyTask(task, localTaskIds)
+      for (const task of legacyTasks) await copyTask(task, legacyTaskIds)
+      for (const item of data.sessions) {
+        await tx.insert(focusSessions).values({
+          workspaceId: `account:${userId}`,
+          minutes: item.minutes,
+          createdAt: item.createdAt,
+          taskId: item.taskId == null ? null : localTaskIds.get(item.taskId) ?? null,
+        })
+      }
+      for (const item of legacySessions) {
+        await tx.insert(focusSessions).values({
+          workspaceId: `account:${userId}`,
+          minutes: item.minutes,
+          createdAt: item.createdAt,
+          taskId: item.taskId == null ? null : legacyTaskIds.get(item.taskId) ?? null,
+        })
+      }
+    })
+    return { ok: true }
   })

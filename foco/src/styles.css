@@ -14,6 +14,8 @@
   --color-tomato-soft: #f6d9cf;
   --color-moss: #3f6b4f;
   --color-moss-soft: #dbe7dc;
+  --color-priority-medium: #8a6418;
+  --color-priority-medium-soft: #efe3c4;
 }
 
 /* ---- tema: Noturno ---- */
@@ -27,6 +29,8 @@
   --color-tomato-soft: #3a1a12;
   --color-moss: #6ba882;
   --color-moss-soft: #1a2a20;
+  --color-priority-medium: #e2bc69;
+  --color-priority-medium-soft: #3b311c;
 }
 
 /* ---- tema: Rosa ---- */
@@ -40,6 +44,8 @@
   --color-tomato-soft: #fbd5e2;
   --color-moss: #a24b8a;
   --color-moss-soft: #f3d4ea;
+  --color-priority-medium: #946300;
+  --color-priority-medium-soft: #f7e8bf;
 }
 
 /* ---- tema: Céu ---- */
@@ -53,6 +59,8 @@
   --color-tomato-soft: #d6e6fb;
   --color-moss: #1f9a8a;
   --color-moss-soft: #d1ece7;
+  --color-priority-medium: #38629a;
+  --color-priority-medium-soft: #dce9fa;
 }
 
 body {

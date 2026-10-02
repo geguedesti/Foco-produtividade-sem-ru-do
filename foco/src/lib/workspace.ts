@@ -1,4 +1,19 @@
 const KEY = 'foco:workspace'
+const LOCAL_DATA_KEY = 'foco:guest-data'
+
+export type LocalTask = {
+  id: number
+  title: string
+  priority: string
+  done: boolean
+  pomodoros: number
+  plannedMinutes: number
+  doneMinutes: number
+  createdAt: string
+  completedAt: string | null
+}
+export type LocalSession = { id: number; minutes: number; createdAt: string; taskId: number | null }
+export type LocalDashboard = { tasks: LocalTask[]; sessions: LocalSession[] }
 
 // Each browser gets an anonymous workspace id so data persists without accounts.
 export function getWorkspaceId(): string {
@@ -42,4 +57,20 @@ export function applyTheme(t: ThemeName) {
 export function setTheme(t: ThemeName) {
   localStorage.setItem(THEME_KEY, t)
   applyTheme(t)
+}
+
+export function getLocalDashboard(): LocalDashboard {
+  try {
+    const data = JSON.parse(localStorage.getItem(LOCAL_DATA_KEY) || '{}')
+    return {
+      tasks: Array.isArray(data.tasks) ? data.tasks : [],
+      sessions: Array.isArray(data.sessions) ? data.sessions : [],
+    }
+  } catch {
+    return { tasks: [], sessions: [] }
+  }
+}
+
+export function saveLocalDashboard(data: LocalDashboard) {
+  localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(data))
 }
